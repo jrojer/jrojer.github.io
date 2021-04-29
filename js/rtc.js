@@ -12,6 +12,8 @@
 // https://bloggeek.me/how-webrtc-works/#:~:text=Audio%20and%20video%20in%20WebRTC,decompress%20audio%20and%20video%20data.&text=WebRTC%20uses%20known%20VoIP%20techniques,and%20encrypted%20version%20of%20RTP.
 // https://simpl.info/rtcdatachannel/
 // https://wasdk.github.io/WasmFiddle/
+//https://developer.mozilla.org/en-US/docs/WebAssembly/Loading_and_running
+
 
 window.onload = function () {
 
@@ -92,11 +94,14 @@ window.onload = function () {
                     log('Message:', event.data);
                     if (event.data.startsWith('Run')) {
                         let s = event.data;
-                        let [x, y, ...rest] = s.slice(4, s.length).split(' ').map(Number);
+                        let intArray = s.slice(4, s.length).split(' ').map(Number);
                         WebAssembly.instantiate(receiveBuffer)
                             .then(obj => {
                                 // Call an exported function:
-                                let result = obj.instance.exports.sum(x,y);
+                                const { sum, memory } = obj.instance.exports;
+                                let array = new Int32Array(memory.buffer, 0, intArray.length);
+                                array.set(intArray);
+                                let result = sum(array.byteOffset, array.length);
                                 log(result);
                                 dataChannel.send(result);
                             });
@@ -243,9 +248,47 @@ window.onload = function () {
         if (message_area.value == '') {
             return;
         }
+        let message = {};
+        if (message_area.value.startsWith('Run ')) {
+            let intArray = message_area.value.slice(4, message_area.value.length).split(' ').map(Number);
+            let numNodes = Object.keys(peerConnections).length;
+            let chunkSize = Math.floor(intArray.length / numNodes);
+            if (chunkSize < 2) {
+                chunkSize = 2;
+            }
+            let chunks = [];
+            for (let i = 0; i < intArray.length; i += chunkSize) {
+                if (i + 2 * chunkSize > intArray.length) {
+                    chunks.push(intArray.slice(i, intArray.length));
+                    break;
+                }
+                else {
+                    chunks.push(intArray.slice(i, i + chunkSize));
+                }
+            }
+            let chunkIdx = 0;
+            for (let nodeId in peerConnections) {
+                if (chunkIdx >= chunks.length) {
+                    message[nodeId] = 'no work';
+                }
+                else {
+                    message[nodeId] = `Run ${chunks[chunkIdx].map(String).join(' ')}`;
+                }
+                chunkIdx++;
+            }
+        }
+        else {
+            for (let nodeId in peerConnections) {
+                message[nodeId] = message_area.value;
+            }
+        }
         for (let nodeId in peerConnections) {
             try {
-                peerConnections[nodeId].channel.send(message_area.value);
+                let text = 'nothing';
+                if (message && message[nodeId] != '') {
+                    text = message[nodeId];
+                }
+                peerConnections[nodeId].channel.send(text);
             }
             catch (e) {
                 console.log(e);
